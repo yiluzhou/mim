@@ -1,6 +1,7 @@
 Click
 colorama
 model-index
+openxlab @ git+https://github.com/yiluzhou/openxlab.git
 opendatalab
 pandas
 pip>=19.3
