@@ -1,7 +1,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 import importlib
+import importlib.metadata as importlib_metadata
 import os.path as osp
-import pkg_resources
 from email.parser import FeedParser
 from typing import List, Tuple
 
@@ -40,46 +40,59 @@ def list_package(all: bool = False) -> List[Tuple[str, ...]]:
     """
     # refresh the pkg_resources
     # more datails at https://github.com/pypa/setuptools/issues/373
-    importlib.reload(pkg_resources)
+    importlib.reload(importlib_metadata)
 
     pkgs_info: List[Tuple[str, ...]] = []
-    for pkg in pkg_resources.working_set:
-        pkg_name = pkg.project_name
+    for dist in importlib_metadata.distributions():
+        pkg_name = dist.metadata.get('Name') or dist.metadata.get('name')
+        if not pkg_name:
+            continue
+
+        version = dist.version
+
         if all:
-            pkgs_info.append((pkg_name, pkg.version))
-        else:
-            installed_path = osp.join(pkg.location, pkg_name)
-            if not osp.exists(installed_path):
-                module_name = None
-                if pkg.has_metadata('top_level.txt'):
-                    module_name = pkg.get_metadata('top_level.txt').split(
-                        '\n')[0]
-                if module_name:
-                    installed_path = osp.join(pkg.location, module_name)
-                else:
-                    continue
+            pkgs_info.append((pkg_name, version))
+            continue
 
-            home_page = pkg.location
-            if pkg.has_metadata('METADATA'):
-                metadata = pkg.get_metadata('METADATA')
-                feed_parser = FeedParser()
-                feed_parser.feed(metadata)
-                home_page = feed_parser.close().get('home-page')
+        files = list(dist.files or [])
+        dist_info_path = next(
+            (p for p in files if p.name.endswith('.dist-info')), None)
+        if dist_info_path is None:
+            continue
 
-            if pkg_name.startswith('mmcv') or pkg_name == 'mmengine':
-                pkgs_info.append((pkg_name, pkg.version, home_page))
+        site_root = dist.locate_file(dist_info_path).parent
+        installed_path = osp.join(site_root, pkg_name)
+        if not osp.exists(installed_path):
+            module_name = None
+            top_level = dist.read_text('top_level.txt')
+            if top_level:
+                module_name = top_level.split('\n')[0].strip()
+            if module_name:
+                installed_path = osp.join(site_root, module_name)
+            else:
                 continue
 
-            possible_metadata_paths = [
-                osp.join(installed_path, '.mim', 'model-index.yml'),
-                osp.join(installed_path, 'model-index.yml'),
-                osp.join(installed_path, '.mim', 'model_zoo.yml'),
-                osp.join(installed_path, 'model_zoo.yml')
-            ]
-            for path in possible_metadata_paths:
-                if osp.exists(path):
-                    pkgs_info.append((pkg_name, pkg.version, home_page))
-                    break
+        home_page = site_root
+        metadata = dist.read_text('METADATA')
+        if metadata:
+            feed_parser = FeedParser()
+            feed_parser.feed(metadata)
+            home_page = feed_parser.close().get('home-page', site_root)
+
+        if pkg_name.startswith('mmcv') or pkg_name == 'mmengine':
+            pkgs_info.append((pkg_name, version, home_page))
+            continue
+
+        possible_metadata_paths = [
+            osp.join(installed_path, '.mim', 'model-index.yml'),
+            osp.join(installed_path, 'model-index.yml'),
+            osp.join(installed_path, '.mim', 'model_zoo.yml'),
+            osp.join(installed_path, 'model_zoo.yml')
+        ]
+        for path in possible_metadata_paths:
+            if osp.exists(path):
+                pkgs_info.append((pkg_name, version, home_page))
+                break
 
     pkgs_info.sort(key=lambda pkg_info: pkg_info[0])
     return pkgs_info

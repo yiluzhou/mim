@@ -2,16 +2,15 @@
 import functools
 import hashlib
 import importlib
+import importlib.metadata as importlib_metadata
 import os
 import os.path as osp
-import pkg_resources
 import re
 import subprocess
 import tarfile
 import typing
 from collections import defaultdict
 from email.parser import FeedParser
-from pkg_resources import get_distribution, parse_version
 from typing import Any, List, Optional, Sequence, Tuple, Union
 
 import click
@@ -63,13 +62,10 @@ def is_installed(package: str) -> bool:
     Args:
         package (str): Name of package to be checked.
     """
-    # refresh the pkg_resources
-    # more datails at https://github.com/pypa/setuptools/issues/373
-    importlib.reload(pkg_resources)
     try:
-        get_distribution(package)
+        importlib_metadata.distribution(package)
         return True
-    except pkg_resources.DistributionNotFound:
+    except importlib_metadata.PackageNotFoundError:
         return False
 
 
@@ -97,14 +93,11 @@ def parse_home_page(package: str) -> Optional[str]:
     Args:
         package (str): Package to parse home page.
     """
-    home_page = None
-    pkg = get_distribution(package)
-    if pkg.has_metadata('METADATA'):
-        metadata = pkg.get_metadata('METADATA')
-        feed_parser = FeedParser()
-        feed_parser.feed(metadata)
-        home_page = feed_parser.close().get('home-page')
-    return home_page
+    dist = importlib_metadata.distribution(package)
+    metadata = dist.metadata
+    if not metadata:
+        return None
+    return metadata.get('Home-page')
 
 
 def get_github_url(package: str) -> str:
@@ -249,7 +242,7 @@ def get_installed_version(package: str) -> str:
     Args:
         package (str): Name of package.
     """
-    return get_distribution(package).version
+    return importlib_metadata.version(package)
 
 
 def get_package_info_from_pypi(package: str, timeout: int = 15) -> dict:
@@ -275,7 +268,7 @@ def get_release_version(package: str, timeout: int = 15) -> List[str]:
     """
     pkg_info = get_package_info_from_pypi(package, timeout)
     releases = pkg_info['releases']
-    return sorted(releases, key=parse_version)
+    return sorted(releases, key=version.parse)
 
 
 def get_latest_version(package: str, timeout: int = 15) -> str:
@@ -304,13 +297,12 @@ def package2module(package: str):
     Args:
         package (str): Package to infer module name.
     """
-    pkg = get_distribution(package)
-    if pkg.has_metadata('top_level.txt'):
-        module_name = pkg.get_metadata('top_level.txt').split('\n')[0]
-        return module_name
-    else:
-        raise ValueError(
-            highlighted_error(f'can not infer the module name of {package}'))
+    dist = importlib_metadata.distribution(package)
+    top_level = dist.read_text('top_level.txt')
+    if top_level:
+        return top_level.split('\n')[0]
+    raise ValueError(
+        highlighted_error(f'can not infer the module name of {package}'))
 
 
 @ensure_installation
@@ -328,12 +320,13 @@ def get_installed_path(package: str) -> str:
     # inferred. For example, mmcv-full is the package name, but mmcv is module
     # name. If we want to get the installed path of mmcv-full, we should concat
     # the pkg.location and module name
-    pkg = get_distribution(package)
-    possible_path = osp.join(pkg.location, package)
+    dist = importlib_metadata.distribution(package)
+    site_root = str(dist.locate_file(''))
+    possible_path = osp.join(site_root, package)
     if osp.exists(possible_path):
         return possible_path
     else:
-        return osp.join(pkg.location, package2module(package))
+        return osp.join(site_root, package2module(package))
 
 
 def is_npu_available() -> bool:
